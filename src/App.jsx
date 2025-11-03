@@ -55,8 +55,13 @@ function App() {
   const [showGameMenu, setShowGameMenu] = useState(null);
   const [showRenameModal, setShowRenameModal] = useState(null);
   const [renameGameName, setRenameGameName] = useState('');
-  
   const [showTimeMenu, setShowTimeMenu] = useState(null);
+
+  // 🚀 [신규] 예약 수정 팝업
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingReservation, setEditingReservation] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editCount, setEditCount] = useState(1);
 
   // --- 2. 데이터 페칭 및 타이머 설정 ---
   useEffect(() => {
@@ -65,14 +70,13 @@ function App() {
       setCurrentTime(new Date());
     }, 1000); // 1초마다 갱신
     
-    // 🚀 [수정] RLS가 꺼진 reservations는 구독이 안 될 수 있으므로,
-    // blocked_slots만 구독합니다. (예약은 수동으로 state 업데이트)
+    // 🚀 [수정] RLS가 켜진 테이블만 구독
     const blockedSlotListener = supabase
       .channel('public:blocked_slots')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_slots' },
         (payload) => {
           console.log('실시간: 마감 변경 감지됨!', payload);
-          fetchInitialData(); // 마감 정보만 실시간 새로고침
+          fetchInitialData(); 
         }
       )
       .subscribe();
@@ -182,6 +186,13 @@ function App() {
       else if (action.type === 'open_time_menu') {
         setShowTimeMenu(action.payload);
       }
+      else if (action.type === 'open_edit_modal') {
+        const res = action.payload;
+        setEditingReservation(res);
+        setEditName(res.user_name);
+        setEditCount(res.user_count);
+        setShowEditModal(true);
+      }
       else if (action.type === 'rename_game') {
         const { game, newName } = action.payload;
         const { error } = await supabase.from('games').update({ name: newName }).eq('id', game.id);
@@ -229,9 +240,23 @@ function App() {
           const { error } = await supabase.from('reservations').delete().eq('id', res.id);
           if (error) throw error;
           alert("예약이 취소되었습니다.");
-          fetchInitialData(); // 🚀 [수정] 수동으로 새로고침
+          fetchInitialData(); 
         }
       }
+      else if (action.type === 'edit_reservation') {
+        const { reservation, newName, newCount } = action.payload;
+        const { error } = await supabase
+          .from('reservations')
+          .update({ user_name: newName, user_count: newCount })
+          .eq('id', reservation.id);
+        
+        if (error) throw error;
+        alert("예약이 수정되었습니다.");
+        setShowEditModal(false);
+        setEditingReservation(null);
+        fetchInitialData();
+      }
+
     } catch (error) {
       if (error.code === '23505') { alert("이미 마감 처리되었습니다."); }
       else { alert("작업 처리 중 오류: " + error.message); }
@@ -321,8 +346,6 @@ function App() {
       alert("예약되었습니다!"); 
       setShowResModal(false); 
       setSelectedCell(null); 
-      
-      // '경합 상태' 버그 해결 (수동 state 업데이트)
       setReservations(prevReservations => [...prevReservations, ...newReservations]);
       
     } catch (error) {
@@ -354,7 +377,6 @@ function App() {
     if (!renameGameName) return alert("새 게임 이름을 입력하세요.");
     const action = { type: 'rename_game', payload: { game: showRenameModal, newName: renameGameName } };
     executeAdminAction(action);
-    setShowRenameModal(null);
   }
   async function handleBlockGameClick() {
     const action = { type: 'block_game', payload: showGameMenu };
@@ -393,6 +415,33 @@ function App() {
     if (!reservation) return; 
     const action = { type: 'cancel_reservation', payload: reservation };
     executeAdminAction(action);
+  }
+  
+  // (관리자) 예약된 셀 더블클릭 (수정 팝업 열기)
+  function handleCellDoubleClick(reservation) {
+    if (!reservation) return; 
+    const action = { type: 'open_edit_modal', payload: reservation };
+    executeAdminAction(action);
+  }
+
+  // (관리자) 예약 수정 팝업 제출
+  async function handleEditSubmit(e) {
+    e.preventDefault();
+    if (!editName || editCount < 1) return alert("이름과 인원수(1명 이상)를 정확히 입력하세요.");
+    
+    const action = {
+      type: 'edit_reservation',
+      payload: { 
+        reservation: editingReservation, 
+        newName: editName, 
+        newCount: editCount 
+      }
+    };
+    
+    await executeAdminAction(action);
+    
+    setShowEditModal(false); 
+    setEditingReservation(null);
   }
 
   // --- 4. 렌더링 (화면 그리기) ---
@@ -504,6 +553,7 @@ function App() {
                         className={cellClass}
                         rowSpan={rowSpan} 
                         onClick={() => handleCellClick(game, time, !!finalReservation, finalIsBlocked)}
+                        onDoubleClick={finalReservation ? () => handleCellDoubleClick(finalReservation) : null}
                         onContextMenu={finalReservation ? (e) => handleCellRightClick(e, finalReservation) : (e) => e.preventDefault()}
                       >
                         {finalReservation ? `${finalReservation.user_name} (${finalReservation.user_count}명)` : ''}
@@ -645,6 +695,39 @@ function App() {
             )}
             <button onClick={handleDeleteTimeClick} style={{ backgroundColor: '#f44336', color: 'white' }}>시간대 영구 삭제</button>
             <button type="button" className="close-button" onClick={() => setShowTimeMenu(null)}>취소</button>
+          </div>
+        </div>
+      )}
+      
+      {/* 🚀 [신규] (팝업 7) 예약 수정 팝업 ----- */}
+      {showEditModal && editingReservation && (
+        <div className="modal-overlay" onClick={() => setShowEditModal(false)}>
+          <div className="modal-content reservation-modal" onClick={e => e.stopPropagation()}>
+            <h2>예약 수정</h2>
+            <p><strong>게임:</strong> {games.find(g => g.id === editingReservation.game_id)?.name}</p>
+            <p><strong>시간:</strong> {editingReservation.time_label}</p>
+            <form onSubmit={handleEditSubmit}>
+              <input
+                type="text"
+                placeholder="예약자 이름"
+                value={editName}
+                inputMode="korean" 
+                onChange={(e) => {
+                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
+                  setEditName(korean);
+                }}
+                autoFocus
+              />
+              <input
+                type="number"
+                placeholder="인원수"
+                value={editCount}
+                onChange={(e) => setEditCount(parseInt(e.target.value))}
+                min="1"
+              />
+              <button type="submit">수정하기</button>
+              <button type="button" onClick={() => setShowEditModal(false)}>취소</button>
+            </form>
           </div>
         </div>
       )}

@@ -15,7 +15,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 🚀 [수정] const { ... }_ 오타 제거
   const { action, payload, password } = req.body;
 
   try {
@@ -108,7 +107,7 @@ export default async function handler(req, res) {
     
     // (예약 취소)
     else if (action === 'cancel_reservation') {
-      const reservationPayload = payload; // 🚀 [수정] 'res' 변수명 충돌 해결
+      const reservationPayload = payload; 
       const { error } = await supabase.from('reservations').delete().eq('id', reservationPayload.id); 
       if (error) throw error;
       return res.status(200).json({ message: '예약이 취소되었습니다.' });
@@ -130,6 +129,18 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: '시간대가 추가되었습니다.' });
     }
     
+    // (예약 수정)
+    else if (action === 'edit_reservation') {
+      const { reservation, newName, newCount } = payload;
+      const { error } = await supabase
+        .from('reservations')
+        .update({ user_name: newName, user_count: newCount })
+        .eq('id', reservation.id);
+      
+      if (error) throw error;
+      return res.status(200).json({ message: '예약이 수정되었습니다.' });
+    }
+
     // 그 외
     return res.status(400).json({ error: 'Invalid action' });
 
