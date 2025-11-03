@@ -34,7 +34,7 @@ function App() {
   // 로딩 및 관리자
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const [password, setPassword] = useState(''); // 🚀 [수정] 로그인 성공 시 여기에 '비밀번호'가 저장됨
+  const [password, setPassword] = useState(''); 
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
@@ -56,8 +56,6 @@ function App() {
   const [showRenameModal, setShowRenameModal] = useState(null);
   const [renameGameName, setRenameGameName] = useState('');
   const [showTimeMenu, setShowTimeMenu] = useState(null);
-
-  // 예약 수정 팝업
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingReservation, setEditingReservation] = useState(null);
   const [editName, setEditName] = useState('');
@@ -68,24 +66,23 @@ function App() {
     fetchInitialData();
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000); // 1초마다 갱신
+    }, 300); // 0.3초마다 갱신
     
-    // RLS가 켜진 테이블만 구독
-    const blockedSlotListener = supabase
-      .channel('public:blocked_slots')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_slots' },
+    // 🚀 [신규] 1번 기능: Supabase 실시간 구독 설정
+    // RLS가 켜진 모든 테이블의 변경 사항을 구독
+    const channel = supabase
+      .channel('public-kiosk-changes')
+      .on('postgres_changes', { event: '*', schema: 'public' },
         (payload) => {
-          console.log('실시간: 마감 변경 감지됨!', payload);
-          fetchInitialData(); 
+          console.log('실시간 변경 감지!', payload);
+          fetchInitialData(); // 🚀 변경 감지 시, 데이터 전체 새로고침
         }
       )
       .subscribe();
       
-    // 🚀 [수정] RLS를 끈 reservations는 실시간 구독 대신 '수동' 새로고침으로 처리합니다.
-      
     return () => {
       clearInterval(timer);
-      supabase.removeChannel(blockedSlotListener);
+      supabase.removeChannel(channel);
     };
   }, []);
 
@@ -93,7 +90,6 @@ function App() {
     setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      // 🚀 [수정] 이제 '설정(settings)' 테이블은 불러오지 않습니다. (보안)
       const [gameData, timeData, resData, blockData] = await Promise.all([
         supabase.from('games').select('*').order('id'),
         supabase.from('operating_times').select('*').order('time_label'),
@@ -116,25 +112,20 @@ function App() {
     if (isAdmin) { setShowAdminPanel(true); } else { setShowSettings(true); }
   }
 
-  // 🚀 [수정] (관리자) 비밀번호 제출 (API 호출로 변경)
+  // (관리자) 비밀번호 제출
   async function handlePasswordSubmit(e) {
     e.preventDefault();
     try {
       const response = await fetch('/api/admin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          password: password, // 입력한 비밀번호
-          action: 'login-test' 
-        })
+        body: JSON.stringify({ password: password, action: 'login-test' })
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'API 오류');
       
       setIsAdmin(true);
       setShowSettings(false);
-      // 🚀 [수정] 비밀번호를 state에 저장 (로그인 상태 유지)
-      // setPassword(''); // 비우지 않음
       
       if (pendingAction) {
         executeAdminAction(pendingAction, password); 
@@ -145,11 +136,11 @@ function App() {
     } catch (error) {
       alert(error.message);
       setPendingAction(null);
-      setPassword(''); // 🚀 실패 시에만 비밀번호 비우기
+      setPassword(''); 
     }
   }
 
-  // 🚀 [수정] (관리자) 대기 중인 작업 실행 (API 호출로 변경)
+  // (관리자) 대기 중인 작업 실행
   async function executeAdminAction(action, adminPassword = null) {
     if (!action) return;
     
@@ -237,8 +228,11 @@ function App() {
           setShowTimeMenu(null);
           setShowGameMenu(null);
           
-          // 🚀 [수정] 수동 새로고침
-          fetchInitialData();
+          // 🚀 [삭제] fetchInitialData(); (실시간 구독이 처리함)
+          // (단, games/times 테이블 변경은 수동 호출 필요)
+          if (action.type.includes('delete_game') || action.type.includes('rename_game') || action.type.includes('delete_time')) {
+            fetchInitialData();
+          }
         }
       }
     } catch (error) {
@@ -248,7 +242,7 @@ function App() {
     }
   }
 
-  // 🚀 [수정] (관리자) 게임 추가 (API 호출)
+  // (관리자) 게임 추가
   async function handleAddGame(e) {
     e.preventDefault();
     if (!newGameName) return alert('게임 이름을 입력하세요.');
@@ -266,11 +260,11 @@ function App() {
       if (!response.ok) throw new Error(result.error);
       alert(result.message);
       setNewGameName('');
-      fetchInitialData(); 
+      fetchInitialData(); // 🚀 games 테이블은 구독 안했으므로 수동 호출
     } catch (error) { alert("게임 추가 중 오류 발생: " + error.message); }
   }
 
-  // 🚀 [수정] (관리자) 시간 범위 추가 (API 호출)
+  // (관리자) 시간 범위 추가
   async function handleAddTimeRange(e) {
     e.preventDefault();
     const start = newTimeStart, end = newTimeEnd;
@@ -296,7 +290,7 @@ function App() {
       if (!response.ok) throw new Error(result.error);
       alert(result.message);
       setNewTimeStart(''); setNewTimeEnd('');
-      fetchInitialData(); 
+      fetchInitialData(); // 🚀 operating_times 테이블은 구독 안했으므로 수동 호출
     } catch (error) { alert("시간 추가 중 오류 발생: " + error.message); }
   }
 
@@ -346,6 +340,7 @@ function App() {
       alert("예약되었습니다!"); 
       setShowResModal(false); 
       setSelectedCell(null); 
+      // 🚀 [수정] '경합 상태' 버그 해결 (수동 state 업데이트)
       setReservations(prevReservations => [...prevReservations, ...newReservations]);
       
     } catch (error) {
@@ -703,7 +698,7 @@ function App() {
         </div>
       )}
       
-      {/* 🚀 [신규] (팝업 7) 예약 수정 팝업 ----- */}
+      {/* ----- (팝업 7) 예약 수정 팝업 ----- */}
       {showEditModal && editingReservation && (
         <div className="modal-overlay" onClick={() => setShowEditModal(false)}>
           <div className="modal-content reservation-modal" onClick={e => e.stopPropagation()}>
