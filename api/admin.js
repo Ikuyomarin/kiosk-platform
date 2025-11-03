@@ -15,6 +15,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  // 🚀 [수정] 오타 제거
   const { action, payload, password } = req.body;
 
   try {
