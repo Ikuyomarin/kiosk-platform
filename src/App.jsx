@@ -34,7 +34,7 @@ function App() {
   // 로딩 및 관리자
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState(''); 
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
@@ -56,8 +56,6 @@ function App() {
   const [showRenameModal, setShowRenameModal] = useState(null);
   const [renameGameName, setRenameGameName] = useState('');
   const [showTimeMenu, setShowTimeMenu] = useState(null);
-
-  // 예약 수정 팝업
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingReservation, setEditingReservation] = useState(null);
   const [editName, setEditName] = useState('');
@@ -68,7 +66,7 @@ function App() {
     fetchInitialData();
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000); // 1초마다 갱신
+    }, 300); // 🚀 0.3초마다 갱신
     
     // 🚀 [수정] 3번 버그 해결 (부드러운 실시간 업데이트)
     const channel = supabase
@@ -94,7 +92,7 @@ function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_slots' },
         (payload) => {
           console.log('실시간: 마감 변경 감지!');
-          fetchInitialData(); // 마감은 복잡하므로 fetchInitialData() 호출
+          fetchInitialData(); 
         }
       )
       .subscribe();
@@ -109,6 +107,7 @@ function App() {
     setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
+      // 🚀 [수정] 이제 '설정(settings)' 테이블은 불러오지 않습니다. (보안)
       const [gameData, timeData, resData, blockData] = await Promise.all([
         supabase.from('games').select('*').order('id'),
         supabase.from('operating_times').select('*').order('time_label'),
@@ -131,79 +130,68 @@ function App() {
     if (isAdmin) { setShowAdminPanel(true); } else { setShowSettings(true); }
   }
 
-  // 🚀 [수정] (관리자) 비밀번호 제출 (Supabase에 직접 확인)
+  // 🚀 [수정] (관리자) 비밀번호 제출 (API 호출로 변경)
   async function handlePasswordSubmit(e) {
     e.preventDefault();
-    const { data } = await supabase.from('settings').select('value').eq('key', 'admin_password').single();
-
-    if (data && data.value === password) {
+    try {
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: password, action: 'login-test' })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'API 오류');
+      
       setIsAdmin(true);
       setShowSettings(false);
       
       if (pendingAction) {
-        executeAdminAction(pendingAction, true); 
+        executeAdminAction(pendingAction, password); 
       } else {
         setShowAdminPanel(true);
       }
-    } else {
-      alert('비밀번호가 틀렸습니다.');
+      
+    } catch (error) {
+      alert(error.message);
       setPendingAction(null);
       setPassword(''); 
     }
   }
 
-  // 🚀 [수정] (관리자) 대기 중인 작업 실행 (Supabase에 직접 실행)
-  async function executeAdminAction(action, forceBypass = false) {
+  // 🚀 [수정] (관리자) 대기 중인 작업 실행 (API 호출로 변경)
+  async function executeAdminAction(action, adminPassword = null) {
     if (!action) return;
-
-    if (!isAdmin && !forceBypass) {
+    
+    const passwordToUse = isAdmin ? password : adminPassword;
+    if (!passwordToUse) {
       setPendingAction(action); 
       setShowSettings(true);    
       return;
     }
     
     try {
+      let confirmMessage = "";
+      let requiresConfirm = true;
+      
       if (action.type === 'block_time') {
         const time = action.payload;
-        if (confirm(`'${time.time_label}~${minutesToTime(timeToMinutes(time.time_label) + 30)}' 시간대 전체를\n이용 중지(마감)하시겠습니까?`)) {
-          const { error } = await supabase.from('blocked_slots').insert({
-            time_label: time.time_label, game_id: null,
-            block_date: new Date().toISOString().split('T')[0]
-          });
-          if (error) throw error;
-          alert("시간대가 마감되었습니다."); setShowTimeMenu(null); 
-          // fetchInitialData(); // 실시간 구독이 처리
-        }
+        confirmMessage = `'${time.time_label}~${minutesToTime(timeToMinutes(time.time_label) + 30)}' 시간대 전체를\n이용 중지(마감)하시겠습니까?`;
       }
       else if (action.type === 'unblock_time') {
         const time = action.payload;
-        if (confirm(`'${time.time_label}' 시간대 마감을 해제하시겠습니까?`)) {
-          const { error } = await supabase.from('blocked_slots')
-            .delete()
-            .eq('time_label', time.time_label)
-            .is('game_id', null);
-          if (error) throw error;
-          alert("시간대 마감이 해제되었습니다."); setShowTimeMenu(null); 
-          // fetchInitialData(); // 실시간 구독이 처리
-        }
+        confirmMessage = `'${time.time_label}' 시간대 마감을 해제하시겠습니까?`;
       }
       else if (action.type === 'delete_time') {
         const time = action.payload;
-        if (confirm(`[경고]\n'${time.time_label}' 시간대를 영구히 삭제하시겠습니까?`)) {
-          await Promise.all([
-            supabase.from('reservations').delete().eq('time_label', time.time_label),
-            supabase.from('blocked_slots').delete().eq('time_label', time.time_label),
-            supabase.from('operating_times').delete().eq('id', time.id)
-          ]);
-          alert("시간대가 영구적으로 삭제되었습니다.");
-          setShowTimeMenu(null); fetchInitialData(); // '틀'이 바뀌므로 수동 호출
-        }
+        confirmMessage = `[경고]\n'${time.time_label}' 시간대를 영구히 삭제하시겠습니까?`;
       }
       else if (action.type === 'open_game_menu') {
         setShowGameMenu(action.payload);
+        requiresConfirm = false; 
       }
       else if (action.type === 'open_time_menu') {
         setShowTimeMenu(action.payload);
+        requiresConfirm = false; 
       }
       else if (action.type === 'open_edit_modal') {
         const res = action.payload;
@@ -211,122 +199,90 @@ function App() {
         setEditName(res.user_name);
         setEditCount(res.user_count);
         setShowEditModal(true);
+        requiresConfirm = false;
       }
       else if (action.type === 'rename_game') {
-        const { game, newName } = action.payload;
-        const { error } = await supabase.from('games').update({ name: newName }).eq('id', game.id);
-        if (error) throw error;
-        alert("게임 이름이 변경되었습니다."); 
-        setShowRenameModal(null); fetchInitialData(); // '틀'이 바뀌므로 수동 호출
+        requiresConfirm = false; // 팝업에서 submit할 때 처리
       }
       else if (action.type === 'block_game') {
          const game = action.payload;
-         if (confirm(`'${game.name}' 게임 전체를\n오늘 하루 이용 중지(마감)하시겠습니까?`)) {
-            const { error } = await supabase.from('blocked_slots').insert({
-              time_label: null, game_id: game.id,
-              block_date: new Date().toISOString().split('T')[0]
-            });
-            if (error) throw error;
-            alert("게임이 마감되었습니다.");
-            setShowGameMenu(null); 
-            // fetchInitialData(); // 실시간 구독이 처리
-         }
+         confirmMessage = `'${game.name}' 게임 전체를\n오늘 하루 이용 중지(마감)하시겠습니까?`;
       }
       else if (action.type === 'unblock_game') {
         const game = action.payload;
-        if (confirm(`'${game.name}' 게임 이용 중지를 해제하시겠습니까?`)) {
-          const { error } = await supabase.from('blocked_slots')
-            .delete()
-            .eq('game_id', game.id)
-            .is('time_label', null);
-          if (error) throw error;
-          alert("게임 이용 중지가 해제되었습니다.");
-          setShowGameMenu(null); 
-          // fetchInitialData(); // 실시간 구독이 처리
-        }
+        confirmMessage = `'${game.name}' 게임 이용 중지를 해제하시겠습니까?`;
       }
       else if (action.type === 'delete_game') {
         const game = action.payload;
-        if (confirm(`[경고]\n'${game.name}' 게임을 영구히 삭제하시겠습니까?`)) {
-          await supabase.from('blocked_slots').delete().eq('game_id', game.id);
-          const { error } = await supabase.from('games').delete().eq('id', game.id);
-          if (error) throw error;
-          alert("게임이 영구적으로 삭제되었습니다.");
-          setShowGameMenu(null); fetchInitialData(); // '틀'이 바뀌므로 수동 호출
-        }
+        confirmMessage = `[경고]\n'${game.name}' 게임을 영구히 삭제하시겠습니까?`;
       }
       else if (action.type === 'cancel_reservation') {
-        const { reservation, game } = action.payload; 
-        if (confirm(`[예약 취소]\n시간: ${reservation.time_label}\n이름: ${reservation.user_name} (${reservation.user_count}명)\n\n이 예약을 정말 취소하시겠습니까?`)) {
-          
-          const idsToDelete = [reservation.id];
-
-          // 60분 게임이면 아랫칸도 찾아서 삭제 목록에 추가
-          if (game.time_unit === 60) {
-            const nextTimeLabel = minutesToTime(timeToMinutes(reservation.time_label) + 30);
-            const nextRes = reservations.find(r => 
-              r.game_id === game.id && 
-              r.time_label === nextTimeLabel && 
-              r.user_name === reservation.user_name
-            );
-            if (nextRes) {
-              idsToDelete.push(nextRes.id);
-            }
-          }
-          
-          const { error } = await supabase.from('reservations').delete().in('id', idsToDelete);
-          if (error) throw error;
-          
-          alert("예약이 취소되었습니다.");
-          // fetchInitialData(); // 실시간 구독이 처리
-        }
-      }
+        const { reservation } = action.payload;
+        confirmMessage = `[예약 취소]\n시간: ${reservation.time_label}\n이름: ${reservation.user_name} (${reservation.user_count}명)\n\n이 예약을 정말 취소하시겠습니까?`;
+      } 
       else if (action.type === 'edit_reservation') {
-        const { reservation, newName, newCount } = action.payload;
-        const game = games.find(g => g.id === reservation.game_id);
-        const updates = [{ id: reservation.id, user_name: newName, user_count: newCount }];
-        
-        if (game.time_unit === 60) {
-          const nextTimeLabel = minutesToTime(timeToMinutes(reservation.time_label) + 30);
-          const nextRes = reservations.find(r => 
-            r.game_id === game.id && 
-            r.time_label === nextTimeLabel && 
-            r.user_name === reservation.user_name
-          );
-          if (nextRes) {
-            updates.push({ id: nextRes.id, user_name: newName, user_count: newCount });
+        requiresConfirm = false; // 팝업에서 submit할 때 처리
+      }
+      else {
+        requiresConfirm = false; 
+      }
+      
+      if (!requiresConfirm || confirm(confirmMessage)) {
+        if (requiresConfirm) {
+          const response = await fetch('/api/admin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              password: passwordToUse, 
+              action: action.type,
+              payload: action.payload
+            })
+          });
+
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error);
+          
+          alert(result.message); 
+          setShowTimeMenu(null);
+          setShowGameMenu(null);
+          
+          // 🚀 [수정] 3번 버그 해결 (불필요한 새로고침 제거)
+          // fetchInitialData(); // 실시간 구독이 처리함
+          if (action.type.includes('delete_game') || action.type.includes('rename_game') || action.type.includes('delete_time')) {
+            fetchInitialData(); // 🚀 단, '틀'이 바뀌는 작업은 수동 호출
           }
         }
-        
-        const { error } = await supabase.from('reservations').upsert(updates);
-        if (error) throw error;
-        
-        alert("예약이 수정되었습니다.");
-        setShowEditModal(false);
-        setEditingReservation(null);
-        // fetchInitialData(); // 실시간 구독이 처리
       }
-
     } catch (error) {
-      if (error.code === '23505') { alert("이미 마감 처리되었습니다."); }
-      else { alert("작업 처리 중 오류: " + error.message); }
+      alert("작업 처리 중 오류: " + error.message);
     } finally {
       setPendingAction(null);
     }
   }
 
-  // (관리자) 게임 추가
+  // 🚀 [수정] (관리자) 게임 추가 (API 호출)
   async function handleAddGame(e) {
     e.preventDefault();
     if (!newGameName) return alert('게임 이름을 입력하세요.');
     try {
-      const { data, error } = await supabase.from('games').insert({ name: newGameName, time_unit: newGameUnit }).select();
-      if (error) throw error;
-      alert(`'${data[0].name}' 게임이 추가되었습니다.`); setNewGameName(''); fetchInitialData();
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: password, 
+          action: 'add_game',
+          payload: { name: newGameName, time_unit: newGameUnit }
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      alert(result.message);
+      setNewGameName('');
+      fetchInitialData(); 
     } catch (error) { alert("게임 추가 중 오류 발생: " + error.message); }
   }
 
-  // (관리자) 시간 범위 추가
+  // 🚀 [수정] (관리자) 시간 범위 추가 (API 호출)
   async function handleAddTimeRange(e) {
     e.preventDefault();
     const start = newTimeStart, end = newTimeEnd;
@@ -339,14 +295,20 @@ function App() {
     for (let m = startMinutes; m < endMinutes; m += 30) { timesToAdd.push({ time_label: minutesToTime(m) }); }
     if (timesToAdd.length === 0) return alert("추가할 시간이 없습니다.");
     try {
-      const { error } = await supabase.from('operating_times').insert(timesToAdd);
-      if (error) {
-         if (error.code === '23505') { alert("오류: 추가하려는 시간 중 일부가 이미 존재합니다. (중복)"); } 
-         else { throw error; }
-      } else {
-         alert(`${start}부터 ${end}까지의 시간대가 추가되었습니다.`);
-         setNewTimeStart(''); setNewTimeEnd(''); fetchInitialData();
-      }
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: password,
+          action: 'add_time_range',
+          payload: { timesToAdd }
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      alert(result.message);
+      setNewTimeStart(''); setNewTimeEnd('');
+      fetchInitialData(); 
     } catch (error) { alert("시간 추가 중 오류 발생: " + error.message); }
   }
 
@@ -438,7 +400,7 @@ function App() {
       alert("예약되었습니다!"); 
       setShowResModal(false); 
       setSelectedCell(null); 
-      // setReservations(prevReservations => [...prevReservations, ...newReservations]); // 🚀 3번 버그 (실시간 구독이 처리)
+      // setReservations(prevReservations => [...prevReservations, ...newReservations]); // 실시간 구독이 처리
       
     } catch (error) {
       if (error.code === '23505') { alert("오류: 해당 시간대에 이미 다른 예약이 있습니다. (중복)"); } 
@@ -467,32 +429,36 @@ function App() {
   async function handleRenameSubmit(e) {
     e.preventDefault();
     if (!renameGameName) return alert("새 게임 이름을 입력하세요.");
-    const action = { type: 'rename_game', payload: { game: showRenameModal, newName: renameGameName } };
-    executeAdminAction(action);
+    const action = {
+      type: 'rename_game',
+      payload: { game: showRenameModal, newName: renameGameName }
+    };
+    await executeAdminAction(action, password);
+    setShowRenameModal(null);
   }
   async function handleBlockGameClick() {
     const action = { type: 'block_game', payload: showGameMenu };
-    executeAdminAction(action);
+    await executeAdminAction(action, password);
   }
   async function handleUnblockGameClick() {
     const action = { type: 'unblock_game', payload: showGameMenu };
-    executeAdminAction(action);
+    await executeAdminAction(action, password);
   }
   async function handleDeleteGameClick() { 
     const action = { type: 'delete_game', payload: showGameMenu };
-    executeAdminAction(action);
+    await executeAdminAction(action, password);
   }
   async function handleBlockTimeClick() { 
     const action = { type: 'block_time', payload: showTimeMenu };
-    executeAdminAction(action);
+    await executeAdminAction(action, password);
   }
   async function handleUnblockTimeClick() { 
     const action = { type: 'unblock_time', payload: showTimeMenu };
-    executeAdminAction(action);
+    await executeAdminAction(action, password);
   }
   async function handleDeleteTimeClick() { 
     const action = { type: 'delete_time', payload: showTimeMenu };
-    executeAdminAction(action);
+    await executeAdminAction(action, password);
   }
   
   // 팝업 닫기 (비밀번호 취소)
@@ -533,7 +499,7 @@ function App() {
       }
     };
     
-    await executeAdminAction(action);
+    await executeAdminAction(action, password);
     
     setShowEditModal(false); 
     setEditingReservation(null);
@@ -548,6 +514,12 @@ function App() {
 
   return (
     <div className="kiosk-container">
+      {/* 🚀 [신규] 로고 이미지 추가 (public/left_logo.png 파일 필요) */}
+      <img src="/left_logo.png" alt="좌측 로고" className="header-logo-left" />
+      
+      {/* 🚀 [신규] 로고 이미지 추가 (public/logo.png 파일 필요) */}
+      <img src="/logo.png" alt="우측 로고" className="header-logo-right" />
+      
       {/* ----- 헤더 ----- */}
       <h1>플레이존 예약 시스템</h1>
       <h2 style={{ textAlign: 'center', color: '#333' }}>
@@ -638,11 +610,10 @@ function App() {
                     }
 
                     let cellClass = 'empty-cell';
-                    // 🚀 [수정] 1번 버그 해결 (지난 예약도 빗금 처리)
-                    if (finalIsBlocked) { cellClass = 'blocked-cell'; } // 1. 시간이 지났거나, 수동 마감
-                    else if (finalReservation && isPast) { cellClass = 'blocked-cell'; } // 2. 시간이 지난 '예약'
-                    else if (finalReservation) { cellClass = 'reserved-cell'; } // 3. (미래의) 예약
-                    else if (isCurrentTimeCell) { cellClass = 'current-time-cell'; } // 4. 현재 시간
+                    if (finalIsBlocked) { cellClass = 'blocked-cell'; } 
+                    else if (finalReservation && isPast) { cellClass = 'blocked-cell'; } 
+                    else if (finalReservation) { cellClass = 'reserved-cell'; } 
+                    else if (isCurrentTimeCell) { cellClass = 'current-time-cell'; } 
 
                     return (
                       <td 
@@ -653,7 +624,7 @@ function App() {
                         onDoubleClick={finalReservation ? () => handleCellDoubleClick(finalReservation) : null}
                         onContextMenu={finalReservation ? (e) => handleCellRightClick(e, finalReservation, game) : (e) => e.preventDefault()}
                       >
-                        {finalReservation ? `${finalReservation.user_name} (${finalReservation.user_count}명)` : ''}
+                        {(!finalIsBlocked && finalReservation) ? `${finalReservation.user_name} (${finalReservation.user_count}명)` : ''}
                       </td>
                     );
                   })}
@@ -723,8 +694,11 @@ function App() {
                 type="text"
                 placeholder="예약자 이름"
                 value={resName}
-                inputMode="korean" // 🚀 [수정] 5번 버그 해결 (한글 우선)
-                onChange={(e) => setResName(e.target.value)} // 🚀 [수정] 5번 버그 해결 (필터링 제거)
+                inputMode="korean" 
+                onChange={(e) => {
+                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
+                  setResName(korean);
+                }}
                 autoFocus
               />
               <input
@@ -805,8 +779,11 @@ function App() {
                 type="text"
                 placeholder="예약자 이름"
                 value={editName}
-                inputMode="korean" // 🚀 [수정] 5번 버그 해결 (한글 우선)
-                onChange={(e) => setEditName(e.target.value)} // 🚀 [수정] 5번 버그 해결 (필터링 제거)
+                inputMode="korean" 
+                onChange={(e) => {
+                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
+                  setEditName(korean);
+                }}
                 autoFocus
               />
               <input

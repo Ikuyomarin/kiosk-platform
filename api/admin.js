@@ -9,13 +9,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY // 🚨 'SERVICE_ROLE_KEY' (관리자 전용 비밀 키)
 );
 
+// 🚀 [신규] 60분 게임의 아랫칸 시간(30분 뒤)을 계산하는 헬퍼 함수
+function getNextTimeLabel(timeLabel) {
+  if (!timeLabel || !timeLabel.includes(':')) return null;
+  const [hours, minutes] = timeLabel.split(':').map(Number);
+  const totalMinutes = hours * 60 + minutes + 30; // 30분 뒤
+  const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
+  const m = (totalMinutes % 60).toString().padStart(2, '0');
+  return `${h}:${m}`;
+}
+
 export default async function handler(req, res) {
-  // POST 요청이 아니면 거부
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 🚀 [수정] 오타 제거
   const { action, payload, password } = req.body;
 
   try {
@@ -108,9 +116,35 @@ export default async function handler(req, res) {
     
     // (예약 취소)
     else if (action === 'cancel_reservation') {
-      const reservationPayload = payload; 
-      const { error } = await supabase.from('reservations').delete().eq('id', reservationPayload.id); 
+      const { reservation, game } = payload; 
+      
+      const idsToDelete = [reservation.id];
+
+      if (game.time_unit === 60) {
+        const startMin = timeToMinutes(reservation.time_label);
+        
+        let partnerTimeLabel;
+        if (startMin % 60 === 0) { // 10:00 (윗칸)
+            partnerTimeLabel = minutesToTime(startMin + 30);
+        } else { // 10:30 (아랫칸)
+            partnerTimeLabel = minutesToTime(startMin - 30);
+        }
+
+        const { data: partnerRes } = await supabase.from('reservations') 
+          .select('id')
+          .eq('game_id', game.id)
+          .eq('user_name', reservation.user_name)
+          .eq('time_label', partnerTimeLabel)
+          .neq('id', reservation.id); 
+          
+        if (partnerRes && partnerRes.length > 0) {
+          idsToDelete.push(partnerRes[0].id);
+        }
+      }
+      
+      const { error } = await supabase.from('reservations').delete().in('id', idsToDelete); 
       if (error) throw error;
+      
       return res.status(200).json({ message: '예약이 취소되었습니다.' });
     }
     
@@ -133,12 +167,36 @@ export default async function handler(req, res) {
     // (예약 수정)
     else if (action === 'edit_reservation') {
       const { reservation, newName, newCount } = payload;
-      const { error } = await supabase
-        .from('reservations')
-        .update({ user_name: newName, user_count: newCount })
-        .eq('id', reservation.id);
       
+      const updates = [{ id: reservation.id, user_name: newName, user_count: newCount }];
+      
+      const { data: game } = await supabase.from('games').select('time_unit').eq('id', reservation.game_id).single();
+      if (game && game.time_unit === 60) {
+        
+        const startMin = timeToMinutes(reservation.time_label);
+        let partnerTimeLabel;
+        if (startMin % 60 === 0) { 
+            partnerTimeLabel = minutesToTime(startMin + 30);
+        } else { 
+            partnerTimeLabel = minutesToTime(startMin - 30);
+        }
+        
+        const { data: nextRes } = await supabase.from('reservations')
+          .select('id')
+          .eq('game_id', reservation.game_id)
+          .eq('user_name', reservation.user_name) 
+          .eq('time_label', partnerTimeLabel)
+          .neq('id', reservation.id) 
+          .single();
+          
+        if (nextRes) {
+          updates.push({ id: nextRes.id, user_name: newName, user_count: newCount });
+        }
+      }
+
+      const { error } = await supabase.from('reservations').upsert(updates);
       if (error) throw error;
+      
       return res.status(200).json({ message: '예약이 수정되었습니다.' });
     }
 
@@ -149,6 +207,7 @@ export default async function handler(req, res) {
     if (error.code === '23505') { // 중복 오류
       return res.status(409).json({ error: 'Conflict: 이미 존재하거나 중복된 항목입니다.' });
     }
+    console.error("API Error:", error); // 🚀 Vercel 로그에 에러 찍기
     return res.status(500).json({ error: error.message });
   }
 }
