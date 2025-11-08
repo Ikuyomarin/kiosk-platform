@@ -9,10 +9,22 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY // 🚨 'SERVICE_ROLE_KEY' (관리자 전용 비밀 키)
 );
 
-// 🚀 [신규] 60분 게임의 아랫칸 시간(30분 뒤)을 계산하는 헬퍼 함수
+// 🚀 [신규] App.jsx에서 가져온 헬퍼 함수 (timeToMinutes 오류 해결)
+function timeToMinutes(time) {
+  if (!time || !time.includes(':')) { return 0; }
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+function minutesToTime(minutes) {
+  const h = Math.floor(minutes / 60).toString().padStart(2, '0');
+  const m = (minutes % 60).toString().padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+// 🚀 [수정] 60분 게임의 아랫칸 시간(30분 뒤)을 계산하는 헬퍼 함수 (오타 수정)
 function getNextTimeLabel(timeLabel) {
   if (!timeLabel || !timeLabel.includes(':')) return null;
-  const [hours, minutes] = timeLabel.split(':').map(Number);
+  const [hours, minutes] = timeLabel.split(':').map(Number); // 🚀 오타 수정
   const totalMinutes = hours * 60 + minutes + 30; // 30분 뒤
   const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
   const m = (totalMinutes % 60).toString().padStart(2, '0');
@@ -24,6 +36,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  // 🚀 [수정] 오타 제거
   const { action, payload, password } = req.body;
 
   try {
@@ -114,12 +127,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: '게임이 영구적으로 삭제되었습니다.' });
     }
     
-    // (예약 취소)
+    // 🚀 [수정] 2번 버그 해결 (60분 게임 취소)
     else if (action === 'cancel_reservation') {
       const { reservation, game } = payload; 
       
       const idsToDelete = [reservation.id];
 
+      // 60분 게임이면 아랫칸도 찾아서 삭제 목록에 추가
       if (game.time_unit === 60) {
         const startMin = timeToMinutes(reservation.time_label);
         
@@ -130,6 +144,7 @@ export default async function handler(req, res) {
             partnerTimeLabel = minutesToTime(startMin - 30);
         }
 
+        // 아랫칸 예약을 이름, 시간, 게임ID로 정확히 찾음
         const { data: partnerRes } = await supabase.from('reservations') 
           .select('id')
           .eq('game_id', game.id)
@@ -142,6 +157,7 @@ export default async function handler(req, res) {
         }
       }
       
+      // 윗칸, 아랫칸 ID를 한 번에 삭제
       const { error } = await supabase.from('reservations').delete().in('id', idsToDelete); 
       if (error) throw error;
       
@@ -207,7 +223,7 @@ export default async function handler(req, res) {
     if (error.code === '23505') { // 중복 오류
       return res.status(409).json({ error: 'Conflict: 이미 존재하거나 중복된 항목입니다.' });
     }
-    console.error("API Error:", error); // 🚀 Vercel 로그에 에러 찍기
+    console.error("API Error:", error); 
     return res.status(500).json({ error: error.message });
   }
 }

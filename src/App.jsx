@@ -74,18 +74,21 @@ function App() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 추가됨!', payload.new);
+          // 🚀 [수정] 3번 버그 해결 (수동으로 state에 추가)
           setReservations(prev => [...prev, payload.new]);
         }
       )
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 수정됨!', payload.new);
+          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 교체)
           setReservations(prev => prev.map(res => res.id === payload.new.id ? payload.new : res));
         }
       )
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 삭제됨!', payload.old);
+          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 제거)
           setReservations(prev => prev.filter(res => res.id !== payload.old.id));
         }
       )
@@ -695,10 +698,7 @@ function App() {
                 placeholder="예약자 이름"
                 value={resName}
                 inputMode="korean" 
-                onChange={(e) => {
-                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
-                  setResName(korean);
-                }}
+                onChange={(e) => setResName(e.target.value)} 
                 autoFocus
               />
               <input
@@ -780,10 +780,7 @@ function App() {
                 placeholder="예약자 이름"
                 value={editName}
                 inputMode="korean" 
-                onChange={(e) => {
-                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
-                  setEditName(korean);
-                }}
+                onChange={(e) => setEditName(e.target.value)} 
                 autoFocus
               />
               <input
