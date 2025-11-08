@@ -66,16 +66,37 @@ function App() {
     fetchInitialData();
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 300); // 0.3초마다 갱신
+    }, 1000); // 1초마다 갱신
     
-    // 🚀 [신규] 1번 기능: Supabase 실시간 구독 설정
-    // RLS가 켜진 모든 테이블의 변경 사항을 구독
+    // 🚀 [수정] 3번 버그 해결 (부드러운 실시간 업데이트)
     const channel = supabase
-      .channel('public-kiosk-changes')
-      .on('postgres_changes', { event: '*', schema: 'public' },
+      .channel('kiosk-realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reservations' },
         (payload) => {
-          console.log('실시간 변경 감지!', payload);
-          fetchInitialData(); // 🚀 변경 감지 시, 데이터 전체 새로고침
+          console.log('실시간: 예약 추가됨!', payload.new);
+          // 🚀 [수정] 3번 버그 해결 (수동으로 state에 추가)
+          setReservations(prev => [...prev, payload.new]);
+        }
+      )
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reservations' },
+        (payload) => {
+          console.log('실시간: 예약 수정됨!', payload.new);
+          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 교체)
+          setReservations(prev => prev.map(res => res.id === payload.new.id ? payload.new : res));
+        }
+      )
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reservations' },
+        (payload) => {
+          console.log('실시간: 예약 삭제됨!', payload.old);
+          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 제거)
+          setReservations(prev => prev.filter(res => res.id !== payload.old.id));
+        }
+      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_slots' },
+        (payload) => {
+          console.log('실시간: 마감 변경 감지!');
+          // 마감은 복잡하므로 fetchInitialData() 호출 (빈도가 낮음)
+          fetchInitialData(); 
         }
       )
       .subscribe();
@@ -228,10 +249,10 @@ function App() {
           setShowTimeMenu(null);
           setShowGameMenu(null);
           
-          // 🚀 [삭제] fetchInitialData(); (실시간 구독이 처리함)
-          // (단, games/times 테이블 변경은 수동 호출 필요)
+          // 🚀 [수정] 3번 버그 해결 (불필요한 새로고침 제거)
+          // fetchInitialData(); // 실시간 구독이 처리함
           if (action.type.includes('delete_game') || action.type.includes('rename_game') || action.type.includes('delete_time')) {
-            fetchInitialData();
+            fetchInitialData(); // 🚀 단, '틀'이 바뀌는 작업은 수동 호출
           }
         }
       }
@@ -260,7 +281,7 @@ function App() {
       if (!response.ok) throw new Error(result.error);
       alert(result.message);
       setNewGameName('');
-      fetchInitialData(); // 🚀 games 테이블은 구독 안했으므로 수동 호출
+      fetchInitialData(); 
     } catch (error) { alert("게임 추가 중 오류 발생: " + error.message); }
   }
 
@@ -290,7 +311,7 @@ function App() {
       if (!response.ok) throw new Error(result.error);
       alert(result.message);
       setNewTimeStart(''); setNewTimeEnd('');
-      fetchInitialData(); // 🚀 operating_times 테이블은 구독 안했으므로 수동 호출
+      fetchInitialData(); 
     } catch (error) { alert("시간 추가 중 오류 발생: " + error.message); }
   }
 
@@ -315,7 +336,56 @@ function App() {
   async function handleReservationSubmit(e) {
     e.preventDefault();
     if (!resName || resCount < 1) return alert("이름과 인원수(1명 이상)를 정확히 입력하세요.");
+    
     const { game, time } = selectedCell;
+    const currentTotalMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+
+    // --- 🚀 [신규] 1번, 2번 버그 해결 (예약 검증) ---
+    
+    // 1. 이 사용자의 *미래* 예약 목록을 가져옴
+    const existingUserReservations = reservations.filter(res => {
+      if (res.user_name !== resName) return false;
+      const resGame = games.find(g => g.id === res.game_id);
+      if (!resGame) return false;
+      const resEndTime = timeToMinutes(res.time_label) + resGame.time_unit;
+      return resEndTime > currentTotalMinutes; // 🚀 '미래'의 예약만 카운트
+    });
+
+    // 2. [Rule 1] 최대 2개 예약 검사
+    if (existingUserReservations.length >= 2) {
+      let errorMessage = `${resName}님은 가능한 예약을 초과했습니다. (최대 2개)\n\n[현재 예약 내역]\n`;
+      const details = existingUserReservations.map(res => {
+        const resGame = games.find(g => g.id === res.game_id);
+        const resStartTime = res.time_label;
+        const resEndTime = minutesToTime(timeToMinutes(resStartTime) + resGame.time_unit);
+        return `${resGame.name}: ${resStartTime}~${resEndTime}`;
+      });
+      errorMessage += details.join('\n');
+      alert(errorMessage);
+      return; // 🚀 예약 중단
+    }
+
+    // 3. [Rule 2] 시간 겹치기 검사
+    const newStart = timeToMinutes(time.time_label);
+    const newEnd = newStart + game.time_unit;
+
+    for (const res of existingUserReservations) {
+      const resGame = games.find(g => g.id === res.game_id);
+      if (!resGame) continue;
+
+      const existingStart = timeToMinutes(res.time_label);
+      const existingEnd = existingStart + resGame.time_unit;
+
+      // 겹치는지 확인
+      if (newStart < existingEnd && newEnd > existingStart) {
+        alert(`시간이 겹칩니다!\n\n${resName}님은 이미 ${resGame.name} (${res.time_label}~${minutesToTime(existingEnd)}) 예약을 가지고 있습니다.`);
+        return; // 🚀 예약 중단
+      }
+    }
+    // --- 예약 검증 끝 ---
+
+
+    // 4. 검증 통과 -> 예약 진행
     const reservationsToInsert = [];
     reservationsToInsert.push({
       game_id: game.id, time_label: time.time_label,
@@ -340,7 +410,8 @@ function App() {
       alert("예약되었습니다!"); 
       setShowResModal(false); 
       setSelectedCell(null); 
-      // 🚀 [수정] '경합 상태' 버그 해결 (수동 state 업데이트)
+      
+      // 🚀 [수정] 3번 버그 해결 (수동 state 업데이트)
       setReservations(prevReservations => [...prevReservations, ...newReservations]);
       
     } catch (error) {
@@ -409,10 +480,13 @@ function App() {
   }
   
   // (관리자) 예약된 셀 우클릭 (예약 취소)
-  function handleCellRightClick(e, reservation) {
+  function handleCellRightClick(e, reservation, game) { // 🚀 2번 버그 해결 (game 객체 받기)
     e.preventDefault(); 
     if (!reservation) return; 
-    const action = { type: 'cancel_reservation', payload: reservation };
+    const action = { 
+      type: 'cancel_reservation', 
+      payload: { reservation, game } // 🚀 2번 버그 해결 (game 객체 함께 전달)
+    };
     executeAdminAction(action);
   }
   
@@ -542,8 +616,9 @@ function App() {
                     }
 
                     let cellClass = 'empty-cell';
-                    if (finalReservation) { cellClass = 'reserved-cell'; } 
-                    else if (finalIsBlocked) { cellClass = 'blocked-cell'; }
+                    // 🚀 [수정] 1번 버그 해결 (지난 예약도 빗금 처리)
+                    if (finalIsBlocked) { cellClass = 'blocked-cell'; }
+                    else if (finalReservation) { cellClass = 'reserved-cell'; } 
                     else if (isCurrentTimeCell) { cellClass = 'current-time-cell'; }
 
                     return (
@@ -553,7 +628,7 @@ function App() {
                         rowSpan={rowSpan} 
                         onClick={() => handleCellClick(game, time, !!finalReservation, finalIsBlocked)}
                         onDoubleClick={finalReservation ? () => handleCellDoubleClick(finalReservation) : null}
-                        onContextMenu={finalReservation ? (e) => handleCellRightClick(e, finalReservation) : (e) => e.preventDefault()}
+                        onContextMenu={finalReservation ? (e) => handleCellRightClick(e, finalReservation, game) : (e) => e.preventDefault()} // 🚀 2번 버그 해결 (game 전달)
                       >
                         {finalReservation ? `${finalReservation.user_name} (${finalReservation.user_count}명)` : ''}
                       </td>
@@ -625,11 +700,8 @@ function App() {
                 type="text"
                 placeholder="예약자 이름"
                 value={resName}
-                inputMode="korean" 
-                onChange={(e) => {
-                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
-                  setResName(korean);
-                }}
+                inputMode="korean" // 🚀 [수정] 5번 버그 해결 (한글 우선)
+                onChange={(e) => setResName(e.target.value)} // 🚀 [수정] 5번 버그 해결 (필터링 제거)
                 autoFocus
               />
               <input
@@ -710,11 +782,8 @@ function App() {
                 type="text"
                 placeholder="예약자 이름"
                 value={editName}
-                inputMode="korean" 
-                onChange={(e) => {
-                  const korean = e.target.value.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣\s]/g, ''); 
-                  setEditName(korean);
-                }}
+                inputMode="korean" // 🚀 [수정] 5번 버그 해결 (한글 우선)
+                onChange={(e) => setEditName(e.target.value)} // 🚀 [수정] 5번 버그 해결 (필터링 제거)
                 autoFocus
               />
               <input
