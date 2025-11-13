@@ -66,29 +66,26 @@ function App() {
     fetchInitialData();
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 300); // 🚀 0.3초마다 갱신
+    }, 300); // 0.3초마다 갱신
     
-    // 🚀 [수정] 3번 버그 해결 (부드러운 실시간 업데이트)
+    // 실시간 구독
     const channel = supabase
       .channel('kiosk-realtime')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 추가됨!', payload.new);
-          // 🚀 [수정] 3번 버그 해결 (수동으로 state에 추가)
           setReservations(prev => [...prev, payload.new]);
         }
       )
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 수정됨!', payload.new);
-          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 교체)
           setReservations(prev => prev.map(res => res.id === payload.new.id ? payload.new : res));
         }
       )
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 삭제됨!', payload.old);
-          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 제거)
           setReservations(prev => prev.filter(res => res.id !== payload.old.id));
         }
       )
@@ -110,7 +107,6 @@ function App() {
     setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      // 🚀 [수정] 이제 '설정(settings)' 테이블은 불러오지 않습니다. (보안)
       const [gameData, timeData, resData, blockData] = await Promise.all([
         supabase.from('games').select('*').order('id'),
         supabase.from('operating_times').select('*').order('time_label'),
@@ -249,10 +245,8 @@ function App() {
           setShowTimeMenu(null);
           setShowGameMenu(null);
           
-          // 🚀 [수정] 3번 버그 해결 (불필요한 새로고침 제거)
-          // fetchInitialData(); // 실시간 구독이 처리함
           if (action.type.includes('delete_game') || action.type.includes('rename_game') || action.type.includes('delete_time')) {
-            fetchInitialData(); // 🚀 단, '틀'이 바뀌는 작업은 수동 호출
+            fetchInitialData();
           }
         }
       }
@@ -263,7 +257,7 @@ function App() {
     }
   }
 
-  // 🚀 [수정] (관리자) 게임 추가 (API 호출)
+  // (관리자) 게임 추가 (API 호출)
   async function handleAddGame(e) {
     e.preventDefault();
     if (!newGameName) return alert('게임 이름을 입력하세요.');
@@ -285,7 +279,7 @@ function App() {
     } catch (error) { alert("게임 추가 중 오류 발생: " + error.message); }
   }
 
-  // 🚀 [수정] (관리자) 시간 범위 추가 (API 호출)
+  // (관리자) 시간 범위 추가 (API 호출)
   async function handleAddTimeRange(e) {
     e.preventDefault();
     const start = newTimeStart, end = newTimeEnd;
@@ -339,32 +333,38 @@ function App() {
     const { game, time } = selectedCell;
     const currentTotalMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
 
-    // --- 예약 검증 ---
+    // --- 🚀 [수정] 예약 검증 (1, 2번 버그 수정) ---
     const existingUserReservations = reservations.filter(res => {
       if (res.user_name !== resName) return false;
       const resGame = games.find(g => g.id === res.game_id);
       if (!resGame) return false;
+
+      // 🚀 [수정] 60분 게임의 '아랫칸'(예: 10:30)은 겹치기/카운트 검사에서 제외
+      if (resGame.time_unit === 60 && timeToMinutes(res.time_label) % 60 !== 0) {
+         return false; 
+      }
+      
       const resEndTime = timeToMinutes(res.time_label) + resGame.time_unit;
-      return resEndTime > currentTotalMinutes; 
+      return resEndTime > currentTotalMinutes; // '미래'의 예약만 카운트
     });
 
-    const distinctReservations = new Set(existingUserReservations.map(res => `${res.user_name}-${res.time_label}`));
-    if (distinctReservations.size >= 2) {
+    // 2. [Rule 1] 최대 2개 예약 검사
+    if (existingUserReservations.length >= 2) { 
       let errorMessage = `${resName}님은 가능한 예약을 초과했습니다. (최대 2개)\n\n[현재 예약 내역]\n`;
-      const details = [];
-      existingUserReservations.forEach(res => {
+      const details = existingUserReservations.map(res => { 
         const resGame = games.find(g => g.id === res.game_id);
-        if(!resGame) return;
-        if(resGame.time_unit === 60 && timeToMinutes(res.time_label) % 60 !== 0) return;
+        if(!resGame) return null;
         const resStartTime = res.time_label;
         const resEndTime = minutesToTime(timeToMinutes(resStartTime) + resGame.time_unit);
-        details.push(`${resGame.name}: ${resStartTime}~${resEndTime}`);
-      });
+        return `${resGame.name}: ${resStartTime}~${resEndTime}`;
+      }).filter(Boolean);
+      
       errorMessage += [...new Set(details)].join('\n'); 
       alert(errorMessage);
       return; 
     }
 
+    // 3. [Rule 2] 시간 겹치기 검사
     const newStart = timeToMinutes(time.time_label);
     const newEnd = newStart + game.time_unit;
     for (const res of existingUserReservations) {
@@ -517,10 +517,8 @@ function App() {
 
   return (
     <div className="kiosk-container">
-      {/* 🚀 [신규] 로고 이미지 추가 (public/left_logo.png 파일 필요) */}
+      {/* 로고 이미지 */}
       <img src="/left_logo.png" alt="좌측 로고" className="header-logo-left" />
-      
-      {/* 🚀 [신규] 로고 이미지 추가 (public/logo.png 파일 필요) */}
       <img src="/logo.png" alt="우측 로고" className="header-logo-right" />
       
       {/* ----- 헤더 ----- */}
