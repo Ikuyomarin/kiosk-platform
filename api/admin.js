@@ -9,7 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY // 🚨 'SERVICE_ROLE_KEY' (관리자 전용 비밀 키)
 );
 
-// 🚀 [신규] 헬퍼 함수 (timeToMinutes 오류 해결)
+// 🚀 [수정] 헬퍼 함수 추가 (timeToMinutes 오류 해결)
 function timeToMinutes(time) {
   if (!time || !time.includes(':')) { return 0; }
   const [hours, minutes] = time.split(':').map(Number);
@@ -18,6 +18,16 @@ function timeToMinutes(time) {
 function minutesToTime(minutes) {
   const h = Math.floor(minutes / 60).toString().padStart(2, '0');
   const m = (minutes % 60).toString().padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+// 🚀 [수정] 60분 게임의 아랫칸 시간(30분 뒤)을 계산하는 헬퍼 함수 (오타 수정)
+function getNextTimeLabel(timeLabel) {
+  if (!timeLabel || !timeLabel.includes(':')) return null;
+  const [hours, minutes] = timeLabel.split(':').map(Number); // 🚀 [수정] 오타 제거
+  const totalMinutes = hours * 60 + minutes + 30; // 30분 뒤
+  const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
+  const m = (totalMinutes % 60).toString().padStart(2, '0');
   return `${h}:${m}`;
 }
 
@@ -51,7 +61,7 @@ export default async function handler(req, res) {
     // (시간대 마감)
     if (action === 'block_time') {
       const time = payload;
-      const { error }_ = await supabase.from('blocked_slots').insert({
+      const { error } = await supabase.from('blocked_slots').insert({
         time_label: time.time_label, game_id: null,
         block_date: new Date().toISOString().split('T')[0]
       });
@@ -62,7 +72,7 @@ export default async function handler(req, res) {
     // (시간대 마감 해제)
     else if (action === 'unblock_time') {
       const time = payload;
-      const { error }_ = await supabase.from('blocked_slots')
+      const { error } = await supabase.from('blocked_slots')
         .delete().eq('time_label', time.time_label).is('game_id', null);
       if (error) throw error;
       return res.status(200).json({ message: '시간대 마감이 해제되었습니다.' });
@@ -81,8 +91,8 @@ export default async function handler(req, res) {
     
     // (게임 이름 변경)
     else if (action === 'rename_game') {
-      const { game, newName }_ = payload; 
-      const { error }_ = await supabase.from('games').update({ name: newName }).eq('id', game.id); 
+      const { game, newName } = payload; 
+      const { error } = await supabase.from('games').update({ name: newName }).eq('id', game.id); 
       if (error) throw error;
       return res.status(200).json({ message: '게임 이름이 변경되었습니다.' });
     }
@@ -90,7 +100,7 @@ export default async function handler(req, res) {
     // (게임 비활성화)
     else if (action === 'block_game') {
       const game = payload;
-      const { error }_ = await supabase.from('blocked_slots').insert({
+      const { error } = await supabase.from('blocked_slots').insert({
         time_label: null, game_id: game.id,
         block_date: new Date().toISOString().split('T')[0]
       });
@@ -101,7 +111,7 @@ export default async function handler(req, res) {
     // (게임 비활성화 해제)
     else if (action === 'unblock_game') {
       const game = payload;
-      const { error }_ = await supabase.from('blocked_slots')
+      const { error } = await supabase.from('blocked_slots')
         .delete().eq('game_id', game.id).is('time_label', null);
       if (error) throw error;
       return res.status(200).json({ message: '게임 이용 중지가 해제되었습니다.' });
@@ -111,28 +121,28 @@ export default async function handler(req, res) {
     else if (action === 'delete_game') {
       const game = payload;
       await supabase.from('blocked_slots').delete().eq('game_id', game.id);
-      const { error }_ = await supabase.from('games').delete().eq('id', game.id); 
+      const { error } = await supabase.from('games').delete().eq('id', game.id); 
       if (error) throw error;
       return res.status(200).json({ message: '게임이 영구적으로 삭제되었습니다.' });
     }
     
     // (예약 취소)
     else if (action === 'cancel_reservation') {
-      const { reservation, game }_ = payload; 
+      const { reservation, game } = payload; 
       
       const idsToDelete = [reservation.id];
 
       if (game.time_unit === 60) {
-        const startMin = timeToMinutes(reservation.time_label);
+        const startMin = timeToMinutes(reservation.time_label); 
         
         let partnerTimeLabel;
         if (startMin % 60 === 0) { // 10:00 (윗칸)
-            partnerTimeLabel = minutesToTime(startMin + 30);
+            partnerTimeLabel = minutesToTime(startMin + 30); 
         } else { // 10:30 (아랫칸)
-            partnerTimeLabel = minutesToTime(startMin - 30);
+            partnerTimeLabel = minutesToTime(startMin - 30); 
         }
 
-        const { data: partnerRes }_ = await supabase.from('reservations') 
+        const { data: partnerRes } = await supabase.from('reservations') 
           .select('id')
           .eq('game_id', game.id)
           .eq('user_name', reservation.user_name)
@@ -144,7 +154,7 @@ export default async function handler(req, res) {
         }
       }
       
-      const { error }_ = await supabase.from('reservations').delete().in('id', idsToDelete); 
+      const { error } = await supabase.from('reservations').delete().in('id', idsToDelete); 
       if (error) throw error;
       
       return res.status(200).json({ message: '예약이 취소되었습니다.' });
@@ -152,61 +162,51 @@ export default async function handler(req, res) {
     
     // (관리자 패널 - 게임 추가)
     else if (action === 'add_game') {
-      const { name, time_unit }_ = payload; 
-      const { error }_ = await supabase.from('games').insert({ name, time_unit }); 
+      const { name, time_unit } = payload; 
+      const { error } = await supabase.from('games').insert({ name, time_unit }); 
       if (error) throw error;
       return res.status(200).json({ message: '게임이 추가되었습니다.' });
     }
     
     // (관리자 패널 - 시간 추가)
     else if (action === 'add_time_range') {
-      const { timesToAdd }_ = payload; 
-      const { error }_ = await supabase.from('operating_times').insert(timesToAdd); 
+      const { timesToAdd } = payload; 
+      const { error } = await supabase.from('operating_times').insert(timesToAdd); 
       if (error) throw error;
       return res.status(200).json({ message: '시간대가 추가되었습니다.' });
     }
     
-    // 🚀 [수정] 3번 버그 해결 (이름 수정)
+    // (예약 수정)
     else if (action === 'edit_reservation') {
-      const { reservation, newName, newCount }_ = payload;
+      const { reservation, newName, newCount } = payload;
       
-      const updates = []; // 🚀 [수정] 빈 배열로 시작
+      const updates = [{ id: reservation.id, user_name: newName, user_count: newCount }];
       
-      const { data: game }_ = await supabase.from('games').select('time_unit').eq('id', reservation.game_id).single();
-      
+      const { data: game } = await supabase.from('games').select('time_unit').eq('id', reservation.game_id).single();
       if (game && game.time_unit === 60) {
-        // 60분 게임이면 윗칸/아랫칸을 모두 찾아서 업데이트
-        const startMin = timeToMinutes(reservation.time_label);
-        let topHalfLabel, bottomHalfLabel;
-        if (startMin % 60 === 0) { // 10:00 (윗칸)
-            topHalfLabel = reservation.time_label;
-            bottomHalfLabel = minutesToTime(startMin + 30);
-        } else { // 10:30 (아랫칸)
-            topHalfLabel = minutesToTime(startMin - 30);
-            bottomHalfLabel = reservation.time_label;
+        
+        const startMin = timeToMinutes(reservation.time_label); 
+        let partnerTimeLabel;
+        if (startMin % 60 === 0) { 
+            partnerTimeLabel = minutesToTime(startMin + 30); 
+        } else { 
+            partnerTimeLabel = minutesToTime(startMin - 30); 
         }
         
-        // 🚀 [수정] 윗칸/아랫칸 '모두' 찾기
-        const { data: partnerRes }_ = await supabase.from('reservations')
+        const { data: nextRes } = await supabase.from('reservations')
           .select('id')
           .eq('game_id', reservation.game_id)
-          .eq('user_name', reservation.user_name) // 🚀 이전 이름으로 찾아야 함
-          .in('time_label', [topHalfLabel, bottomHalfLabel]);
+          .eq('user_name', reservation.user_name) 
+          .eq('time_label', partnerTimeLabel)
+          .neq('id', reservation.id) 
+          .single();
           
-        if (partnerRes && partnerRes.length > 0) {
-          // 🚀 찾은 모든 ID(1개 또는 2개)를 업데이트 목록에 추가
-          partnerRes.forEach(res => {
-            updates.push({ id: res.id, user_name: newName, user_count: newCount });
-          });
+        if (nextRes) {
+          updates.push({ id: nextRes.id, user_name: newName, user_count: newCount });
         }
       }
 
-      // 🚀 [수정] 30분 게임이거나, 60분 게임의 파트너를 못 찾은 경우 (안전장치)
-      if (updates.length === 0) {
-          updates.push({ id: reservation.id, user_name: newName, user_count: newCount });
-      }
-
-      const { error }_ = await supabase.from('reservations').upsert(updates);
+      const { error } = await supabase.from('reservations').upsert(updates);
       if (error) throw error;
       
       return res.status(200).json({ message: '예약이 수정되었습니다.' });
