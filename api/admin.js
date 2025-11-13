@@ -9,7 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY // 🚨 'SERVICE_ROLE_KEY' (관리자 전용 비밀 키)
 );
 
-// 🚀 [신규] App.jsx에서 가져온 헬퍼 함수 (timeToMinutes 오류 해결)
+// 🚀 [신규] 헬퍼 함수 (timeToMinutes 오류 해결)
 function timeToMinutes(time) {
   if (!time || !time.includes(':')) { return 0; }
   const [hours, minutes] = time.split(':').map(Number);
@@ -18,16 +18,6 @@ function timeToMinutes(time) {
 function minutesToTime(minutes) {
   const h = Math.floor(minutes / 60).toString().padStart(2, '0');
   const m = (minutes % 60).toString().padStart(2, '0');
-  return `${h}:${m}`;
-}
-
-// 🚀 [수정] 60분 게임의 아랫칸 시간(30분 뒤)을 계산하는 헬퍼 함수 (오타 수정)
-function getNextTimeLabel(timeLabel) {
-  if (!timeLabel || !timeLabel.includes(':')) return null;
-  const [hours, minutes] = timeLabel.split(':').map(Number); // 🚀 [수정] 오타 제거
-  const totalMinutes = hours * 60 + minutes + 30; // 30분 뒤
-  const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
-  const m = (totalMinutes % 60).toString().padStart(2, '0');
   return `${h}:${m}`;
 }
 
@@ -133,13 +123,13 @@ export default async function handler(req, res) {
       const idsToDelete = [reservation.id];
 
       if (game.time_unit === 60) {
-        const startMin = timeToMinutes(reservation.time_label); 
+        const startMin = timeToMinutes(reservation.time_label);
         
         let partnerTimeLabel;
         if (startMin % 60 === 0) { // 10:00 (윗칸)
-            partnerTimeLabel = minutesToTime(startMin + 30); 
+            partnerTimeLabel = minutesToTime(startMin + 30);
         } else { // 10:30 (아랫칸)
-            partnerTimeLabel = minutesToTime(startMin - 30); 
+            partnerTimeLabel = minutesToTime(startMin - 30);
         }
 
         const { data: partnerRes } = await supabase.from('reservations') 
@@ -176,34 +166,44 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: '시간대가 추가되었습니다.' });
     }
     
-    // (예약 수정)
+    // 🚀 [수정] 3번 버그 해결 (이름 수정)
     else if (action === 'edit_reservation') {
       const { reservation, newName, newCount } = payload;
       
-      const updates = [{ id: reservation.id, user_name: newName, user_count: newCount }];
+      const updates = []; // 🚀 [수정] 빈 배열로 시작
       
       const { data: game } = await supabase.from('games').select('time_unit').eq('id', reservation.game_id).single();
+      
       if (game && game.time_unit === 60) {
-        
-        const startMin = timeToMinutes(reservation.time_label); 
-        let partnerTimeLabel;
-        if (startMin % 60 === 0) { 
-            partnerTimeLabel = minutesToTime(startMin + 30); 
-        } else { 
-            partnerTimeLabel = minutesToTime(startMin - 30); 
+        // 60분 게임이면 윗칸/아랫칸을 모두 찾아서 업데이트
+        const startMin = timeToMinutes(reservation.time_label);
+        let topHalfLabel, bottomHalfLabel;
+        if (startMin % 60 === 0) { // 10:00 (윗칸)
+            topHalfLabel = reservation.time_label;
+            bottomHalfLabel = minutesToTime(startMin + 30);
+        } else { // 10:30 (아랫칸)
+            topHalfLabel = minutesToTime(startMin - 30);
+            bottomHalfLabel = reservation.time_label;
         }
         
-        const { data: nextRes } = await supabase.from('reservations')
+        // 🚀 [수정] 윗칸/아랫칸 '모두' 찾기
+        const { data: partnerRes } = await supabase.from('reservations')
           .select('id')
           .eq('game_id', reservation.game_id)
-          .eq('user_name', reservation.user_name) 
-          .eq('time_label', partnerTimeLabel)
-          .neq('id', reservation.id) 
-          .single();
+          .eq('user_name', reservation.user_name) // 🚀 이전 이름으로 찾아야 함
+          .in('time_label', [topHalfLabel, bottomHalfLabel]);
           
-        if (nextRes) {
-          updates.push({ id: nextRes.id, user_name: newName, user_count: newCount });
+        if (partnerRes && partnerRes.length > 0) {
+          // 🚀 찾은 모든 ID(1개 또는 2개)를 업데이트 목록에 추가
+          partnerRes.forEach(res => {
+            updates.push({ id: res.id, user_name: newName, user_count: newCount });
+          });
         }
+      }
+
+      // 🚀 [수정] 30분 게임이거나, 60분 게임의 파트너를 못 찾은 경우 (안전장치)
+      if (updates.length === 0) {
+          updates.push({ id: reservation.id, user_name: newName, user_count: newCount });
       }
 
       const { error } = await supabase.from('reservations').upsert(updates);
