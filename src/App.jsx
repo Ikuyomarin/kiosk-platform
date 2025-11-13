@@ -66,36 +66,33 @@ function App() {
     fetchInitialData();
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 300); // 🚀 0.3초마다 갱신
+    }, 300); // 0.3초마다 갱신
     
-    // 🚀 [수정] 3번 버그 해결 (부드러운 실시간 업데이트)
+    // 실시간 구독
     const channel = supabase
       .channel('kiosk-realtime')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 추가됨!', payload.new);
-          // 🚀 [수정] 3번 버그 해결 (수동으로 state에 추가)
           setReservations(prev => [...prev, payload.new]);
         }
       )
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 수정됨!', payload.new);
-          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 교체)
           setReservations(prev => prev.map(res => res.id === payload.new.id ? payload.new : res));
         }
       )
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reservations' },
         (payload) => {
           console.log('실시간: 예약 삭제됨!', payload.old);
-          // 🚀 [수정] 3번 버그 해결 (수동으로 state에서 제거)
           setReservations(prev => prev.filter(res => res.id !== payload.old.id));
         }
       )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_slots' },
         (payload) => {
           console.log('실시간: 마감 변경 감지!');
-          fetchInitialData(); // 마감은 복잡하므로 fetchInitialData() 호출
+          fetchInitialData(); 
         }
       )
       .subscribe();
@@ -110,7 +107,6 @@ function App() {
     setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      // 🚀 [수정] 이제 '설정(settings)' 테이블은 불러오지 않습니다. (보안)
       const [gameData, timeData, resData, blockData] = await Promise.all([
         supabase.from('games').select('*').order('id'),
         supabase.from('operating_times').select('*').order('time_label'),
@@ -258,10 +254,8 @@ function App() {
           setShowTimeMenu(null);
           setShowGameMenu(null);
           
-          // 🚀 [수정] 3번 버그 해결 (불필요한 새로고침 제거)
-          // fetchInitialData(); // 실시간 구독이 처리함
           if (action.type.includes('delete_game') || action.type.includes('rename_game') || action.type.includes('delete_time')) {
-            fetchInitialData(); // 🚀 단, '틀'이 바뀌는 작업은 수동 호출
+            fetchInitialData();
           }
         }
       }
@@ -449,23 +443,32 @@ function App() {
     e.preventDefault();
     if (!renameGameName) return alert("새 게임 이름을 입력하세요.");
     
-    // 🚀 [수정] 60분 게임은 '윗칸' 정보만 필요함 (api/admin.js가 짝을 찾아줌)
     const gameToRename = showRenameModal;
-    
     const action = {
       type: 'rename_game',
       payload: { game: gameToRename, newName: renameGameName }
     };
     
-    // 🚀 API 호출을 위해 비밀번호를 다시 확인
-    if (!isAdmin) {
-      setPendingAction(action);
-      setShowRenameModal(null); // 이름 변경 팝업 닫고
-      setShowSettings(true); // 비밀번호 팝업 열기
-    } else {
-      await executeAdminAction(action, password); // 로그인 상태면 state의 비번 사용
+    try {
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: password, // 로그인 시 팝업이 떴으므로 state의 password 사용
+          action: action.type,
+          payload: action.payload
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      
+      alert(result.message);
+      setShowRenameModal(null);
+      fetchInitialData(); // '틀'이 바뀌었으므로 수동 호출
+      
+    } catch (error) {
+      alert("이름 변경 중 오류: " + error.message);
     }
-    setShowRenameModal(null);
   }
   async function handleBlockGameClick() {
     const action = { type: 'block_game', payload: showGameMenu };
@@ -521,9 +524,7 @@ function App() {
     e.preventDefault();
     if (!editName || editCount < 1) return alert("이름과 인원수(1명 이상)를 정확히 입력하세요.");
     
-    // 🚀 [수정] 60분 게임은 '윗칸' 정보만 필요함 (api/admin.js가 짝을 찾아줌)
     const reservationToEdit = editingReservation;
-    
     const action = {
       type: 'edit_reservation',
       payload: { 
@@ -533,17 +534,27 @@ function App() {
       }
     };
     
-    // 🚀 API 호출을 위해 비밀번호를 다시 확인
-    if (!isAdmin) {
-      setPendingAction(action);
-      setShowEditModal(false); // 수정 팝업 닫고
-      setShowSettings(true); // 비밀번호 팝업 열기
-    } else {
-      await executeAdminAction(action, password); // 로그인 상태면 state의 비번 사용
+    try {
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: password, // 로그인 시 팝업이 떴으므로 state의 password 사용
+          action: action.type,
+          payload: action.payload
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      
+      alert(result.message);
+      setShowEditModal(false); 
+      setEditingReservation(null);
+      // fetchInitialData(); // 실시간 구독이 처리
+      
+    } catch (error) {
+       alert("예약 수정 중 오류: " + error.message);
     }
-    
-    setShowEditModal(false); 
-    setEditingReservation(null);
   }
 
   // --- 4. 렌더링 (화면 그리기) ---
@@ -823,7 +834,7 @@ function App() {
                 type="number"
                 placeholder="인원수"
                 value={editCount}
-                onChange={(e) => setEditCount(parseInt(e.g.target.value))}
+                onChange={(e) => setEditCount(parseInt(e.target.value))}
                 min="1"
               />
               <button type="submit">수정하기</button>
