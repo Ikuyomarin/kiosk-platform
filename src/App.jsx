@@ -129,7 +129,7 @@ function App() {
     if (isAdmin) { setShowAdminPanel(true); } else { setShowSettings(true); }
   }
 
-  // 🚀 [수정] (관리자) 비밀번호 제출 (API 호출로 변경)
+  // (관리자) 비밀번호 제출 (API 호출)
   async function handlePasswordSubmit(e) {
     e.preventDefault();
     try {
@@ -157,7 +157,7 @@ function App() {
     }
   }
 
-  // 🚀 [수정] (관리자) 대기 중인 작업 실행 (API 호출로 변경)
+  // (관리자) 대기 중인 작업 실행 (API 호출)
   async function executeAdminAction(action, adminPassword = null) {
     if (!action) return;
     
@@ -171,6 +171,7 @@ function App() {
     try {
       let confirmMessage = "";
       let requiresConfirm = true;
+      let requiresApiCall = true; // 🚀 [신규] API 호출이 필요한지 여부
       
       if (action.type === 'block_time') {
         const time = action.payload;
@@ -187,10 +188,12 @@ function App() {
       else if (action.type === 'open_game_menu') {
         setShowGameMenu(action.payload);
         requiresConfirm = false; 
+        requiresApiCall = false; // 🚀 API 호출 필요 없음
       }
       else if (action.type === 'open_time_menu') {
         setShowTimeMenu(action.payload);
         requiresConfirm = false; 
+        requiresApiCall = false; // 🚀 API 호출 필요 없음
       }
       else if (action.type === 'open_edit_modal') {
         const res = action.payload;
@@ -199,9 +202,11 @@ function App() {
         setEditCount(res.user_count);
         setShowEditModal(true);
         requiresConfirm = false;
+        requiresApiCall = false; // 🚀 API 호출 필요 없음
       }
       else if (action.type === 'rename_game') {
         requiresConfirm = false; // 팝업에서 submit할 때 처리
+        requiresApiCall = false; // 🚀 API 호출은 handleRenameSubmit에서 직접 함
       }
       else if (action.type === 'block_game') {
          const game = action.payload;
@@ -221,13 +226,17 @@ function App() {
       } 
       else if (action.type === 'edit_reservation') {
         requiresConfirm = false; // 팝업에서 submit할 때 처리
+        requiresApiCall = false; // 🚀 API 호출은 handleEditSubmit에서 직접 함
       }
       else {
         requiresConfirm = false; 
+        requiresApiCall = false;
       }
       
+      // 🚀 [수정] 확인이 필요 없거나, 확인을 눌렀을 경우
       if (!requiresConfirm || confirm(confirmMessage)) {
-        if (requiresConfirm) {
+        // 🚀 [수정] API 호출이 필요한 경우에만 API 호출
+        if (requiresApiCall) {
           const response = await fetch('/api/admin', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -429,15 +438,31 @@ function App() {
     setRenameGameName(showGameMenu.name);
     setShowGameMenu(null);
   }
+  // 🚀 [수정] 3번 버그 해결 (이름 변경 API 호출)
   async function handleRenameSubmit(e) {
     e.preventDefault();
     if (!renameGameName) return alert("새 게임 이름을 입력하세요.");
-    const action = {
-      type: 'rename_game',
-      payload: { game: showRenameModal, newName: renameGameName }
-    };
-    await executeAdminAction(action, password);
-    setShowRenameModal(null);
+    
+    try {
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: password,
+          action: 'rename_game',
+          payload: { game: showRenameModal, newName: renameGameName }
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      
+      alert(result.message);
+      setShowRenameModal(null);
+      fetchInitialData(); // '틀'이 바뀌었으므로 수동 호출
+      
+    } catch (error) {
+      alert("이름 변경 중 오류: " + error.message);
+    }
   }
   async function handleBlockGameClick() {
     const action = { type: 'block_game', payload: showGameMenu };
@@ -488,24 +513,36 @@ function App() {
     executeAdminAction(action);
   }
 
-  // (관리자) 예약 수정 팝업 제출
+  // 🚀 [수정] 3번 버그 해결 (예약 수정 API 호출)
   async function handleEditSubmit(e) {
     e.preventDefault();
     if (!editName || editCount < 1) return alert("이름과 인원수(1명 이상)를 정확히 입력하세요.");
     
-    const action = {
-      type: 'edit_reservation',
-      payload: { 
-        reservation: editingReservation, 
-        newName: editName, 
-        newCount: editCount 
-      }
-    };
-    
-    await executeAdminAction(action, password);
-    
-    setShowEditModal(false); 
-    setEditingReservation(null);
+    try {
+      const response = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: password,
+          action: 'edit_reservation',
+          payload: { 
+            reservation: editingReservation, 
+            newName: editName, 
+            newCount: editCount 
+          }
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      
+      alert(result.message);
+      setShowEditModal(false); 
+      setEditingReservation(null);
+      // fetchInitialData(); // 실시간 구독이 처리
+      
+    } catch (error) {
+       alert("예약 수정 중 오류: " + error.message);
+    }
   }
 
   // --- 4. 렌더링 (화면 그리기) ---
