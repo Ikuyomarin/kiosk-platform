@@ -3,13 +3,13 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// 🚀 [수정] Vercel에 저장된 'VITE_'가 없는 '서버용' 키를 사용
+// Vercel에 저장된 '비밀 키'를 사용해 서버용 클라이언트 생성
 const supabase = createClient(
-  process.env.SUPABASE_URL,         // 🚨 VITE_SUPABASE_URL -> SUPABASE_URL
+  process.env.SUPABASE_URL,         // 🚀 [수정] VITE_ (접두사 없음)
   process.env.SUPABASE_SERVICE_KEY // 🚨 'SERVICE_ROLE_KEY' (관리자 전용 비밀 키)
 );
 
-// 🚀 [신규] 헬퍼 함수 (timeToMinutes 오류 해결)
+// 🚀 [신규] App.jsx에서 가져온 헬퍼 함수 (timeToMinutes 오류 해결)
 function timeToMinutes(time) {
   if (!time || !time.includes(':')) { return 0; }
   const [hours, minutes] = time.split(':').map(Number);
@@ -18,6 +18,16 @@ function timeToMinutes(time) {
 function minutesToTime(minutes) {
   const h = Math.floor(minutes / 60).toString().padStart(2, '0');
   const m = (minutes % 60).toString().padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+// 🚀 [수정] 60분 게임의 아랫칸 시간(30분 뒤)을 계산하는 헬퍼 함수 (오타 수정)
+function getNextTimeLabel(timeLabel) {
+  if (!timeLabel || !timeLabel.includes(':')) return null;
+  const [hours, minutes] = timeLabel.split(':').map(Number); // 🚀 [수정] 오타 제거
+  const totalMinutes = hours * 60 + minutes + 30; // 30분 뒤
+  const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
+  const m = (totalMinutes % 60).toString().padStart(2, '0');
   return `${h}:${m}`;
 }
 
